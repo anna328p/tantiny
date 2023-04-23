@@ -33,4 +33,3 @@ Gemfile.lock
 
 # Cargo
 /target
-Cargo.lock
