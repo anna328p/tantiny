@@ -92,6 +92,7 @@ module Tantiny
       def smart_query(index, fields, query_string, **options)
         fuzzy_distance = options[:fuzzy_distance]
         boost_factor = options.fetch(:boost, DEFAULT_BOOST)
+        use_prefix = options.fetch(:prefix, false)
 
         field_queries = [*fields].map do |field|
           terms = index.schema.tokenizer_for(field).terms(query_string)
@@ -110,7 +111,11 @@ module Tantiny
 
           # @type var terms: untyped
           # @type var term_queries: untyped
-          last_term_query = prefix_query(index, field, terms.last) | term_queries.last
+          last_term_query = if use_prefix
+            prefix_query(index, field, terms.last) | term_queries.last
+          else
+            term_queries.last
+          end
 
           conjunction(last_term_query, *term_queries[0...-1])
         end.compact
