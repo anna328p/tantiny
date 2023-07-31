@@ -15,7 +15,7 @@ mkmf.log
 /tmp/
 /lib/tantiny.so
 
-Gemfile.lock
+# Gemfile.lock
 .ruby-version
 .ruby-gemset
 .tool-versions
@@ -33,3 +33,5 @@ Gemfile.lock
 
 # Cargo
 /target
+
+/.direnv/

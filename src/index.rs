@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::str::FromStr;
-use rutie::{methods, Object, AnyObject, Integer, NilClass, Array, RString, Hash};
+use rutie::{methods, Object, AnyObject, Integer, NilClass, Array, RString, Hash, class, VerifiedObject, Class, TryConvert};
 use tantivy::{doc, Document, Term, ReloadPolicy, Index, IndexWriter, IndexReader, DateTime};
-use tantivy::schema::{Schema, TextOptions, TextFieldIndexing, IndexRecordOption, FacetOptions, STRING, STORED, INDEXED, FAST};
+use tantivy::schema::{Schema, TextOptions, TextFieldIndexing, IndexRecordOption, FacetOptions, IntOptions, Cardinality, STRING, STORED, INDEXED, FAST};
 use tantivy::collector::TopDocs;
 use tantivy::directory::MmapDirectory;
 
@@ -27,6 +27,88 @@ pub(crate) fn unwrap_index_mut(index: &mut RTantinyIndex) -> &mut TantinyIndex {
     index.get_data_mut(&*TANTINY_INDEX_WRAPPER)
 }
 
+class!(RTantinySchemaField);
+
+impl VerifiedObject for RTantinySchemaField {
+    fn is_correct_type<T: Object>(object: &T) -> bool {
+        let field_class = Class::from_existing("::Tantiny::Schema::Field");
+        let ancestors = field_class.ancestors();
+
+        ancestors.iter().any(|&c| c == field_class)
+    }
+
+    fn error_message() -> &'static str {
+        "Error converting to Field"
+    }
+}
+
+impl RTantinySchemaField {
+    fn field_type(self) -> String {
+        unsafe { self.send("type", &[]) }
+            .try_unwrap()
+    }
+
+    fn key(self) -> String {
+        unsafe { self.send("key", &[]) }
+            .try_unwrap()
+    }
+
+    fn stored(self) -> bool {
+        unsafe { self.send("stored", &[]) }
+            .try_unwrap()
+    }
+
+    fn tokenizer(self) -> Option<String> {
+        let val = unsafe { self.send("tokenizer", &[]) };
+
+        match RString::try_convert(val) {
+            Ok(s) => Some(s.to_string()),
+            Err(_) => None
+        }
+    }
+}
+
+impl TryUnwrap<RTantinySchemaField> for AnyObject {
+    fn try_unwrap(self) -> RTantinySchemaField {
+        self.try_convert_to::<RTantinySchemaField>().unwrap()
+    }
+}
+
+class!(RTantinySchema);
+
+impl VerifiedObject for RTantinySchema {
+    fn is_correct_type<T: Object>(object: &T) -> bool {
+        let field_class = Class::from_existing("::Tantiny::Schema");
+        let ancestors = field_class.ancestors();
+
+        ancestors.iter().any(|&c| c == field_class)
+    }
+
+    fn error_message() -> &'static str {
+        "Error converting to Schema"
+    }
+}
+
+impl RTantinySchema {
+    fn fields(self) -> HashMap<String, RTantinySchemaField> {
+        unsafe { self.send("fields", &[]) }
+            .try_convert_to::<Hash>()
+            .unwrap()
+            .try_unwrap()
+    }
+
+    fn default_tokenizer(self) -> String {
+        unsafe { self.send("default_tokenizer", &[]) }
+            .try_unwrap()
+    }
+}
+
+impl TryUnwrap<RTantinySchema> for AnyObject {
+    fn try_unwrap(self) -> RTantinySchema {
+        self.try_convert_to::<RTantinySchema>().unwrap()
+    }
+}
+
 #[rustfmt::skip::macros(methods)]
 methods!(
     RTantinyIndex,
@@ -34,67 +116,67 @@ methods!(
 
     fn new_index(
         path: RString,
-        default_tokenizer: AnyObject,
-        field_tokenizers: Hash,
-        text_fields: Array,
-        string_fields: Array,
-        integer_fields: Array,
-        double_fields: Array,
-        date_fields: Array,
-        facet_fields: Array
+        schema: RTantinySchema
     ) -> RTantinyIndex {
         try_unwrap_params!(
-            path: String,
-            default_tokenizer: RTantinyTokenizer,
-            field_tokenizers: HashMap<String, RTantinyTokenizer>,
-            text_fields: Vec<String>,
-            string_fields: Vec<String>,
-            integer_fields: Vec<String>,
-            double_fields: Vec<String>,
-            date_fields: Vec<String>,
-            facet_fields: Vec<String>
+            path: String
         );
 
         let index_path = MmapDirectory::open(path).try_unwrap();
         let mut schema_builder = Schema::builder();
 
-        schema_builder.add_text_field("id", STRING | STORED);
+        for (name, field) in schema.unwrap().fields() {
+            let field_type = field.field_type().as_str();
 
-        for field in text_fields {
-            let tokenizer_name =
-                if field_tokenizers.contains_key(&field) {
-                    &*field
-                } else {
-                    "default"
+            let stored = field.stored();
+
+            let int_options = IntOptions {
+                indexed: true,
+                stored: stored,
+                fast: Some(Cardinality::SingleValue),
+            };
+
+            if field_type == "text" {
+                let tokenizer_name = match field.tokenizer() {
+                    Some(s) => &*s,
+                    None => "default"
                 };
-            let indexing = TextFieldIndexing::default()
-                .set_tokenizer(tokenizer_name)
-                .set_index_option(IndexRecordOption::WithFreqsAndPositions);
-            let options = TextOptions::default()
-                .set_indexing_options(indexing);
-            schema_builder.add_text_field(&field, options);
+
+                let indexing = TextFieldIndexing::default()
+                    .set_tokenizer(tokenizer_name)
+                    .set_index_option(IndexRecordOption::WithFreqsAndPositions);
+
+                let options = TextOptions {
+                    indexing: Some(indexing),
+                    stored: stored
+                };
+
+                schema_builder.add_text_field(&*name, options);
+
+            } else if field_type == "string" {
+                let options =
+                    TextOptions { stored: stored, indexing: None }
+                        | STRING;
+
+                schema_builder.add_text_field(&*name, options);
+
+            } else if field_type == "integer" {
+                schema_builder.add_i64_field(&*name, int_options);
+            } else if field_type == "double" {
+                schema_builder.add_f64_field(&*name, int_options);
+            } else if field_type == "date" {
+                schema_builder.add_date_field(&*name, int_options);
+            } else if field_type == "facet" {
+                let options = FacetOptions {
+                    indexed: true,
+                    stored: true
+                };
+
+                schema_builder.add_text_field(&*name, options);
+            }
         }
 
-        for field in string_fields {
-            schema_builder.add_text_field(&field, STRING);
-        }
-
-        for field in integer_fields {
-            schema_builder.add_i64_field(&field, FAST | INDEXED);
-        }
-
-        for field in double_fields {
-            schema_builder.add_f64_field(&field, FAST | INDEXED);
-        }
-
-        for field in date_fields {
-            schema_builder.add_date_field(&field, FAST | INDEXED);
-        }
-
-        for field in facet_fields {
-            let options = FacetOptions::default().set_indexed();
-            schema_builder.add_facet_field(&field, options);
-        }
+        schema_builder.add_text_field("id", STRING | STORED);
 
         let schema = schema_builder.build();
         let index = Index::open_or_create(index_path, schema.clone()).try_unwrap();

@@ -69,6 +69,10 @@ primitive_try_unwrap_impl!(Integer, i64);
 primitive_try_unwrap_impl!(Float, f64);
 primitive_try_unwrap_impl!(Boolean, bool);
 
+impl TryUnwrap<AnyObject> for AnyObject {
+    fn try_unwrap(self) -> AnyObject { self }
+}
+
 impl<T> TryUnwrap<Vec<T>> for Array where
     AnyObject: TryUnwrap<T>
 {
